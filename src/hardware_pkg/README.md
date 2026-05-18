@@ -1,5 +1,8 @@
 # hardware_pkg
 
+> Deprecated: STM32 unified control now uses `stm32_end_effector_pkg`.
+> Do not use `hardware_node` for the new control chain, because it talks directly to the old motor and gripper hardware interfaces.
+
 ROS 2 (rclpy) 硬件控制包：
 
 - `motor_ctl.py`：CL57R 步进驱动器（Modbus RTU）控制
