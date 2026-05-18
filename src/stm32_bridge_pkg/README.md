@@ -1,6 +1,6 @@
-# stm32_end_effector_pkg
+# stm32_bridge_pkg
 
-ROS 2 bridge package for the STM32 unified end-effector controller.
+ROS 2 bridge package for the STM32 unified device controller.
 
 This package replaces the old direct Linux control path. ROS now sends one text protocol over a single STM32 serial port:
 
@@ -21,14 +21,14 @@ The node parses STM32 responses:
 
 ```bash
 cd Auto_control_ws
-colcon build --packages-select stm32_end_effector_pkg
+colcon build --packages-select stm32_bridge_pkg
 source install/setup.bash
 ```
 
 ## Run
 
 ```bash
-ros2 run stm32_end_effector_pkg stm32_bridge_node --ros-args \
+ros2 run stm32_bridge_pkg stm32_bridge_node --ros-args \
   -p stm32.port:=/dev/ttyUSB0 \
   -p stm32.baudrate:=115200
 ```

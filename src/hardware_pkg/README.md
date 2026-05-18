@@ -1,6 +1,6 @@
 # hardware_pkg
 
-> Deprecated: STM32 unified control now uses `stm32_end_effector_pkg`.
+> Deprecated: STM32 unified control now uses `stm32_bridge_pkg`.
 > Do not use `hardware_node` for the new control chain, because it talks directly to the old motor and gripper hardware interfaces.
 
 ROS 2 (rclpy) 硬件控制包：

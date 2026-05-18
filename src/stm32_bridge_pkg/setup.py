@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = 'stm32_end_effector_pkg'
+package_name = 'stm32_bridge_pkg'
 
 setup(
     name=package_name,
@@ -14,12 +14,12 @@ setup(
     zip_safe=True,
     maintainer='cjh',
     maintainer_email='jchenjb@connect.ust.hk',
-    description='ROS 2 bridge for STM32 unified end-effector control.',
+    description='ROS 2 bridge for STM32 unified device control.',
     license='TODO: License declaration',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'stm32_bridge_node = stm32_end_effector_pkg.stm32_bridge_node:main',
+            'stm32_bridge_node = stm32_bridge_pkg.stm32_bridge_node:main',
         ],
     },
 )

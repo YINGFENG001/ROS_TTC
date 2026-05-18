@@ -38,18 +38,18 @@ ROS 2 node
 建议新建 package：
 
 ```text
-stm32_end_effector_pkg
+stm32_bridge_pkg
 ```
 
 建议文件结构：
 
 ```text
-stm32_end_effector_pkg/
+stm32_bridge_pkg/
   package.xml
   setup.py
   setup.cfg
-  resource/stm32_end_effector_pkg
-  stm32_end_effector_pkg/
+  resource/stm32_bridge_pkg
+  stm32_bridge_pkg/
     __init__.py
     stm32_serial_client.py
     stm32_bridge_node.py
