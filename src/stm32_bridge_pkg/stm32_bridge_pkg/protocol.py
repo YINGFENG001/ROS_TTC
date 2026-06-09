@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional
 
 
-PROTOCOL_TYPES = {'ack', 'done', 'state', 'err'}
+PROTOCOL_TYPES = {'ack', 'done', 'state', 'err', 'event'}
 
 
 @dataclass(frozen=True)

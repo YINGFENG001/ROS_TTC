@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import json
-import math
+import re
 import threading
+import time
 from typing import Callable, Optional
 
 import rclpy
 from geometry_msgs.msg import Vector3
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Empty, String
+from std_msgs.msg import Empty, Int32, String
 
-from .protocol import Stm32Message, fields_to_json_dict, state_text
+from .protocol import Stm32Message, fields_to_json_dict
 from .stm32_serial_client import Stm32CommandError, Stm32SerialClient
 
 
@@ -34,6 +35,10 @@ class Stm32BridgeNode(Node):
         self.declare_parameter('motor.default_accel', 100)
         self.declare_parameter('motor.default_decel', 100)
         self.declare_parameter('motor.default_rpm', 100)
+        self.declare_parameter('legacy.enable', True)
+        self.declare_parameter('legacy.motor_device', 'mtor1')
+        self.declare_parameter('legacy.motor_max_rpm', 1500)
+        self.declare_parameter('legacy.clamp_wait_done', False)
 
         self.stm32_port = self._string_param('stm32.port')
         self.stm32_baudrate = self._int_param('stm32.baudrate')
@@ -50,10 +55,19 @@ class Stm32BridgeNode(Node):
         self.motor_default_accel = self._int_param('motor.default_accel')
         self.motor_default_decel = self._int_param('motor.default_decel')
         self.motor_default_rpm = self._int_param('motor.default_rpm')
+        self.legacy_enabled = self._bool_param('legacy.enable')
+        self.legacy_motor_device = self._string_param('legacy.motor_device')
+        self.legacy_motor_max_rpm = self._int_param('legacy.motor_max_rpm')
+        self.legacy_clamp_wait_done = self._bool_param('legacy.clamp_wait_done')
+        if self.legacy_motor_device not in {'mtor1', 'mtor2'}:
+            self.legacy_motor_device = 'mtor1'
+        if self.legacy_motor_max_rpm < 0:
+            self.legacy_motor_max_rpm = 1500
 
         self.raw_tx_pub = self.create_publisher(String, '/stm32/raw_tx', 10)
         self.raw_rx_pub = self.create_publisher(String, '/stm32/raw_rx', 10)
         self.error_pub = self.create_publisher(String, '/stm32/error', 10)
+        self.event_pub = self.create_publisher(String, '/stm32/event', 10)
 
         self.mtor1_state_pub = self.create_publisher(JointState, '/mtor1/state', 10)
         self.mtor2_state_pub = self.create_publisher(JointState, '/mtor2/state', 10)
@@ -62,6 +76,9 @@ class Stm32BridgeNode(Node):
         self.vacuum_status_text_pub = self.create_publisher(String, '/vacuum/status_text', 10)
 
         self.client: Optional[Stm32SerialClient] = None
+        self._legacy_lock = threading.Lock()
+        self._legacy_motor_continuous = False
+        self._legacy_motor_direction = 1
         self._connect_client()
 
         self.create_subscription(String, '/stm32/command', self._cb_stm32_command, 10)
@@ -69,6 +86,10 @@ class Stm32BridgeNode(Node):
 
         self.create_subscription(Vector3, '/mtor1/move', lambda msg: self._cb_motor_move('mtor1', msg), 10)
         self.create_subscription(Vector3, '/mtor2/move', lambda msg: self._cb_motor_move('mtor2', msg), 10)
+        self.create_subscription(Int32, '/mtor1/rpm', lambda msg: self._cb_motor_rpm('mtor1', msg), 10)
+        self.create_subscription(Int32, '/mtor2/rpm', lambda msg: self._cb_motor_rpm('mtor2', msg), 10)
+        self.create_subscription(String, '/mtor1/set_params', lambda msg: self._cb_motor_set_params('mtor1', msg), 10)
+        self.create_subscription(String, '/mtor2/set_params', lambda msg: self._cb_motor_set_params('mtor2', msg), 10)
         self.create_subscription(Empty, '/mtor1/stop', lambda msg: self._cb_simple_command('mtor1 stop'), 10)
         self.create_subscription(Empty, '/mtor2/stop', lambda msg: self._cb_simple_command('mtor2 stop'), 10)
         self.create_subscription(Empty, '/mtor1/status_query', lambda msg: self._cb_status_query('mtor1'), 10)
@@ -82,6 +103,11 @@ class Stm32BridgeNode(Node):
         self.create_subscription(Empty, '/vacuum/release', lambda msg: self._cb_simple_command('vacum release'), 10)
         self.create_subscription(Empty, '/vacuum/stop', lambda msg: self._cb_simple_command('vacum stop'), 10)
         self.create_subscription(Empty, '/vacuum/status_query', lambda msg: self._cb_status_query('vacum'), 10)
+
+        if self.legacy_enabled:
+            self.create_subscription(Vector3, '/motor/jog_cmd', self._cb_legacy_motor_jog, 10)
+            self.create_subscription(Empty, '/motor/stop', self._cb_legacy_motor_stop, 10)
+            self.create_subscription(Vector3, '/gripper/cmd_percent', self._cb_legacy_gripper_percent, 10)
 
     def destroy_node(self) -> bool:
         if self.client:
@@ -121,27 +147,93 @@ class Stm32BridgeNode(Node):
 
     def _cb_motor_move(self, device: str, msg: Vector3) -> None:
         rev_0p1 = int(round(msg.x * 10.0))
-        rpm = int(round(msg.y)) if not math.isclose(msg.y, 0.0) else self.motor_default_rpm
-        accel = int(round(msg.z)) if not math.isclose(msg.z, 0.0) else self.motor_default_accel
-        decel = self.motor_default_decel if math.isclose(msg.z, 0.0) else accel
-        command = f'{device} move {rev_0p1} {accel} {decel} {rpm}'
+        command = f'{device} move {rev_0p1}'
         self._run_async(lambda: self._send(command, wait_for='ack', timeout=self.command_timeout))
+
+    def _cb_motor_rpm(self, device: str, msg: Int32) -> None:
+        value = int(msg.data)
+        self._run_async(lambda: self._send(f'{device} rpm {value}', wait_for='ack', timeout=self.command_timeout))
+
+    def _cb_motor_set_params(self, device: str, msg: String) -> None:
+        params = msg.data.strip()
+        if not params:
+            self._publish_error(f'ignore empty /{device}/set_params')
+            return
+        self._run_async(lambda: self._send(f'{device} set {params}', wait_for='ack', timeout=self.command_timeout))
 
     def _cb_clamp_move_percent(self, msg: Vector3) -> None:
         percent = self._clamp(msg.x, 0.0, 100.0)
-        speed_percent = self._clamp(msg.y, 0.0, 100.0)
         wait_for = 'done' if int(msg.z) != 0 else 'ack'
         timeout = self.motion_timeout if wait_for == 'done' else self.command_timeout
-
-        span = self.gripper_close_position - self.gripper_open_position
-        position = int(round(self.gripper_close_position - percent / 100.0 * span))
-        speed_span = self.gripper_max_speed - self.gripper_min_speed
-        speed = int(round(self.gripper_min_speed + speed_percent / 100.0 * speed_span))
-        if speed <= 0:
-            speed = self.gripper_default_speed
-
-        command = f'clamp move {position} {speed}'
+        command = f'clamp move {percent:.1f}%'
         self._run_async(lambda: self._send(command, wait_for=wait_for, timeout=timeout))
+
+    def _cb_legacy_motor_stop(self, _: Empty) -> None:
+        device = self.legacy_motor_device
+
+        def worker() -> None:
+            with self._legacy_lock:
+                self._legacy_motor_continuous = False
+            self._send(f'{device} stop', wait_for='ack', timeout=self.command_timeout, raise_errors=False)
+
+        self._run_async(worker)
+
+    def _cb_legacy_motor_jog(self, msg: Vector3) -> None:
+        device = self.legacy_motor_device
+        direction = 1 if msg.x >= 0.0 else -1
+        rpm = int(round(self._clamp(abs(msg.y), 0.0, float(self.legacy_motor_max_rpm))))
+        duration = max(float(msg.z), 0.0)
+
+        def worker() -> None:
+            if rpm <= 0:
+                self._send(f'{device} rpm 0', wait_for='ack', timeout=self.command_timeout, raise_errors=False)
+                with self._legacy_lock:
+                    self._legacy_motor_continuous = False
+                return
+
+            start_required = False
+            with self._legacy_lock:
+                start_required = not self._legacy_motor_continuous
+
+            if start_required:
+                start_arg = '+0' if direction > 0 else '-0'
+                response = self._send(
+                    f'{device} move {start_arg}',
+                    wait_for='ack',
+                    timeout=self.command_timeout,
+                    raise_errors=False,
+                )
+                if response is None:
+                    return
+                with self._legacy_lock:
+                    self._legacy_motor_continuous = True
+                    self._legacy_motor_direction = direction
+
+            signed_rpm = rpm if direction > 0 else -rpm
+            self._send(
+                f'{device} rpm {signed_rpm}',
+                wait_for='ack',
+                timeout=self.command_timeout,
+                raise_errors=False,
+            )
+            with self._legacy_lock:
+                self._legacy_motor_continuous = True
+                self._legacy_motor_direction = direction
+
+            if duration > 0.0:
+                time.sleep(duration)
+                self._send(f'{device} stop', wait_for='ack', timeout=self.command_timeout, raise_errors=False)
+                with self._legacy_lock:
+                    self._legacy_motor_continuous = False
+
+        self._run_async(worker)
+
+    def _cb_legacy_gripper_percent(self, msg: Vector3) -> None:
+        percent = self._clamp(msg.x, 0.0, 100.0)
+        wait_for = 'done' if self.legacy_clamp_wait_done else 'ack'
+        timeout = self.motion_timeout if wait_for == 'done' else self.command_timeout
+        command = f'clamp move {percent:.1f}%'
+        self._run_async(lambda: self._send(command, wait_for=wait_for, timeout=timeout, raise_errors=False))
 
     def _cb_vacuum_set_params(self, msg: Vector3) -> None:
         min_vac = int(round(self._clamp(msg.x, 0.0, 100.0)))
@@ -179,6 +271,9 @@ class Stm32BridgeNode(Node):
             return None
 
     def _on_protocol_message(self, message: Stm32Message) -> None:
+        if message.type == 'event':
+            self._publish_event(message)
+            return
         if message.type == 'err':
             self._publish_error(message.raw)
             return
@@ -209,8 +304,7 @@ class Stm32BridgeNode(Node):
             self.mtor2_state_pub.publish(js)
 
     def _publish_clamp_state(self, message: Stm32Message) -> None:
-        raw_position = self._float_field(message, 'pos', 'position', default=float(self.gripper_close_position))
-        percent = self._clamp_raw_to_percent(raw_position)
+        raw_position, percent = self._parse_clamp_position(message)
         speed = self._float_field(message, 'speed', 'velocity', default=0.0)
         current = self._float_field(message, 'current', 'load', 'effort', default=0.0)
 
@@ -223,13 +317,27 @@ class Stm32BridgeNode(Node):
         self.clamp_state_pub.publish(js)
 
         status = String()
-        status.data = state_text(message)
+        status.data = message.raw
         self.clamp_status_text_pub.publish(status)
 
     def _publish_vacuum_status(self, message: Stm32Message) -> None:
         text = String()
         text.data = json.dumps(fields_to_json_dict(message.fields), ensure_ascii=False, separators=(',', ':'))
         self.vacuum_status_text_pub.publish(text)
+
+    def _publish_event(self, message: Stm32Message) -> None:
+        msg = String()
+        msg.data = message.raw
+        self.event_pub.publish(msg)
+
+        level = message.fields.get('level', '').lower()
+        if level == 'fault':
+            self._publish_error(message.raw)
+        elif level == 'warn':
+            self.error_pub.publish(msg)
+            self.get_logger().warning(message.raw)
+        else:
+            self.get_logger().info(message.raw)
 
     def _publish_raw_tx(self, line: str) -> None:
         msg = String()
@@ -260,6 +368,9 @@ class Stm32BridgeNode(Node):
             return int(value.integer_value)
         return int(value.double_value)
 
+    def _bool_param(self, name: str) -> bool:
+        return bool(self.get_parameter(name).get_parameter_value().bool_value)
+
     def _float_param(self, name: str) -> float:
         value = self.get_parameter(name).get_parameter_value()
         if value.double_value:
@@ -277,6 +388,17 @@ class Stm32BridgeNode(Node):
                 return default
         return default
 
+    def _optional_float_field(self, message: Stm32Message, *keys: str) -> Optional[float]:
+        for key in keys:
+            value = message.fields.get(key)
+            if value is None:
+                continue
+            try:
+                return float(value)
+            except ValueError:
+                continue
+        return None
+
     @staticmethod
     def _command_action(command: str) -> str:
         parts = command.split()
@@ -290,6 +412,28 @@ class Stm32BridgeNode(Node):
             return 0.0
         percent = (self.gripper_close_position - raw_position) * 100.0 / span
         return self._clamp(percent, 0.0, 100.0)
+
+    def _parse_clamp_position(self, message: Stm32Message) -> tuple[float, float]:
+        raw_position = self._optional_float_field(message, 'pos', 'position', 'openPos')
+        percent = self._optional_float_field(message, 'pct', 'percent')
+
+        if raw_position is None or percent is None:
+            match = re.search(
+                r'openPos/Pct\s*=\s*([+-]?\d+(?:\.\d+)?)\s*\(([+-]?\d+(?:\.\d+)?)%\)',
+                message.raw,
+            )
+            if match:
+                if raw_position is None:
+                    raw_position = float(match.group(1))
+                if percent is None:
+                    percent = float(match.group(2))
+
+        if raw_position is None:
+            raw_position = float(self.gripper_close_position)
+        if percent is None:
+            percent = self._clamp_raw_to_percent(raw_position)
+
+        return raw_position, self._clamp(percent, 0.0, 100.0)
 
     @staticmethod
     def _clamp(value: float, lower: float, upper: float) -> float:
