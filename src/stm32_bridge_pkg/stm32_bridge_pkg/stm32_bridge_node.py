@@ -10,7 +10,7 @@ import rclpy
 from geometry_msgs.msg import Vector3
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Empty, Int32, String
+from std_msgs.msg import Empty, Float32, Int32, String
 
 from .protocol import Stm32Message, fields_to_json_dict
 from .stm32_serial_client import Stm32CommandError, Stm32SerialClient
@@ -84,8 +84,8 @@ class Stm32BridgeNode(Node):
         self.create_subscription(String, '/stm32/command', self._cb_stm32_command, 10)
         self.create_subscription(Empty, '/emergency_stop', self._cb_emergency_stop, 10)
 
-        self.create_subscription(Vector3, '/mtor1/move', lambda msg: self._cb_motor_move('mtor1', msg), 10)
-        self.create_subscription(Vector3, '/mtor2/move', lambda msg: self._cb_motor_move('mtor2', msg), 10)
+        self.create_subscription(Float32, '/mtor1/move', lambda msg: self._cb_motor_move('mtor1', msg), 10)
+        self.create_subscription(Float32, '/mtor2/move', lambda msg: self._cb_motor_move('mtor2', msg), 10)
         self.create_subscription(Int32, '/mtor1/rpm', lambda msg: self._cb_motor_rpm('mtor1', msg), 10)
         self.create_subscription(Int32, '/mtor2/rpm', lambda msg: self._cb_motor_rpm('mtor2', msg), 10)
         self.create_subscription(String, '/mtor1/set_params', lambda msg: self._cb_motor_set_params('mtor1', msg), 10)
@@ -145,8 +145,8 @@ class Stm32BridgeNode(Node):
     def _cb_status_query(self, device: str) -> None:
         self._run_async(lambda: self._send(f'{device} status', 'state', self.command_timeout))
 
-    def _cb_motor_move(self, device: str, msg: Vector3) -> None:
-        rev_0p1 = int(round(msg.x * 10.0))
+    def _cb_motor_move(self, device: str, msg: Float32) -> None:
+        rev_0p1 = int(round(float(msg.data) * 10.0))
         command = f'{device} move {rev_0p1}'
         self._run_async(lambda: self._send(command, wait_for='ack', timeout=self.command_timeout))
 

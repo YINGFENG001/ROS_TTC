@@ -49,8 +49,8 @@ ros2 run stm32_bridge_pkg stm32_bridge_node --ros-args \
 
 ```bash
 ros2 topic pub --once /stm32/command std_msgs/msg/String "{data: 'mtor1 status'}"
-ros2 topic pub --once /mtor1/move geometry_msgs/msg/Vector3 "{x: 5.0, y: 0.0, z: 0.0}"
-ros2 topic pub --once /mtor2/move geometry_msgs/msg/Vector3 "{x: -2.0, y: 0.0, z: 0.0}"
+ros2 topic pub --once /mtor1/move std_msgs/msg/Float32 "{data: 5.0}"
+ros2 topic pub --once /mtor2/move std_msgs/msg/Float32 "{data: -2.0}"
 ros2 topic pub --once /mtor1/rpm std_msgs/msg/Int32 "{data: 100}"
 ros2 topic pub --once /mtor1/set_params std_msgs/msg/String "{data: '400 400 1:1 4'}"
 ros2 topic pub --once /clamp/move_percent geometry_msgs/msg/Vector3 "{x: 100.0, y: 0.0, z: 1.0}"
@@ -59,7 +59,7 @@ ros2 topic pub --once /vacuum/grip std_msgs/msg/Empty "{}"
 ros2 topic pub --once /emergency_stop std_msgs/msg/Empty "{}"
 ```
 
-`/mtor1/move` and `/mtor2/move` use output-shaft revolutions in `x`; the bridge sends STM32 `mtorX move <rev_0p1>`. `/mtorX/rpm` sends STM32 `mtorX rpm <value>`. `/mtorX/set_params` sends STM32 `mtorX set <accel> <decel> <gear> <micro>` from the string payload. `/clamp/move_percent` sends STM32 `clamp move <x>%`; `y` is ignored because clamp speed is configured by STM32 `clamp set`.
+`/mtor1/move` and `/mtor2/move` use `std_msgs/msg/Float32`; `data` is output-shaft revolutions and the bridge sends STM32 `mtorX move <rev_0p1>`. `/mtorX/rpm` sends STM32 `mtorX rpm <value>`. `/mtorX/set_params` sends STM32 `mtorX set <accel> <decel> <gear> <micro>` from the string payload. `/clamp/move_percent` sends STM32 `clamp move <x>%`; `y` is ignored because clamp speed is configured by STM32 `clamp set`.
 
 ## Legacy Joy Topics
 

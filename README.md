@@ -30,6 +30,18 @@ source install/setup.bash
 
 当前 Windows 环境已做 Python 语法检查；ROS 2 `colcon build` 需要后续在 Linux/ROS 环境中验证。
 
+## 包结构
+
+当前主包为 `src/stm32_bridge_pkg`：
+
+| 文件 | 作用 |
+|---|---|
+| `stm32_bridge_pkg/protocol.py` | 解析 STM32 `@ack/@done/@state/@err/@event` 行，格式化 `#<id>` 命令 |
+| `stm32_bridge_pkg/stm32_serial_client.py` | 打开串口、读线程、命令 id、写锁、响应等待和超时处理 |
+| `stm32_bridge_pkg/stm32_bridge_node.py` | ROS topic 与 STM32 命令之间的映射 |
+
+`hardware_pkg` 保留作旧直连硬件方案参考，不参与当前推荐链路。
+
 ## 运行
 
 ```bash
@@ -62,7 +74,7 @@ ROS 发送给 STM32 的命令格式：
 #<id> <device> <cmd> [args...]
 ```
 
-STM32 返回的机器可解析行：
+STM32 最新串口协议以 [TTC_stm32f4/Doc/串口命令说明.md](https://github.com/YINGFENG001/TTC_stm32f4/blob/master/Doc/%E4%B8%B2%E5%8F%A3%E5%91%BD%E4%BB%A4%E8%AF%B4%E6%98%8E.md) 为准。常见机器可解析行：
 
 ```text
 @ack id=<id> dev=<dev> cmd=<cmd> result=ok ...
@@ -97,29 +109,27 @@ ros2 topic echo /stm32/event
 ### 定长移动
 
 ```text
-/mtor1/move    geometry_msgs/msg/Vector3
-/mtor2/move    geometry_msgs/msg/Vector3
+/mtor1/move    std_msgs/msg/Float32
+/mtor2/move    std_msgs/msg/Float32
 ```
 
 字段：
 
 ```text
-x = 输出轴圈数，ROS 内部换算为 0.1 圈单位
-y = 当前忽略
-z = 当前忽略
+data = 输出轴圈数，ROS 内部换算为 0.1 圈单位
 ```
 
 映射：
 
 ```text
-/mtor1/move x=5.0 -> mtor1 move 50
-/mtor2/move x=-2.0 -> mtor2 move -20
+/mtor1/move data=5.0 -> mtor1 move 50
+/mtor2/move data=-2.0 -> mtor2 move -20
 ```
 
 示例：
 
 ```bash
-ros2 topic pub --once /mtor1/move geometry_msgs/msg/Vector3 "{x: 5.0, y: 0.0, z: 0.0}"
+ros2 topic pub --once /mtor1/move std_msgs/msg/Float32 "{data: 5.0}"
 ```
 
 ### 连续运行调速
@@ -260,8 +270,6 @@ ros2 topic pub --once /vacuum/grip std_msgs/msg/Empty "{}"
 | `/motor/stop` | `std_msgs/msg/Empty` | `mtor1 stop` |
 | `/gripper/cmd_percent` | `geometry_msgs/msg/Vector3` | `clamp move <x>%` |
 
-`/motor/enable` 已删除，不再使用。
-
 当前 `joy2robot.py` 的电机控制：
 
 - X 键：启动/停止 toggle。
@@ -296,6 +304,5 @@ vacum stop
 ## 说明
 
 - `stm32_bridge_pkg/README.md` 是该包的简版使用说明。
-- STM32 最新串口协议以 `D:/XGKJproject/stm32f4/DEVELOPING/Doc/串口命令说明.md` 为准。
-- `ROS接入STM32控制方案.md` 是早期方案文档，部分命令格式已经过时，仅作历史参考。
+- STM32 最新串口协议以 [TTC_stm32f4/Doc/串口命令说明.md](https://github.com/YINGFENG001/TTC_stm32f4/blob/master/Doc/%E4%B8%B2%E5%8F%A3%E5%91%BD%E4%BB%A4%E8%AF%B4%E6%98%8E.md) 为准。
 - 本工作区 launch 仍需后续在 Linux/ROS 环境中按实际启动方式调整。
